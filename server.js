@@ -333,20 +333,21 @@ app.get('/api/discover', auth, async (req, res) => {
     const swiped = await Swipe.find({ swipedBy: me._id }).distinct('swipedOn');
 
     const filter = {
-      _id:    { $ne: me._id, $nin: swiped },
-      age:    { $gte: me.ageRange.min, $lte: me.ageRange.max },
+      _id: { $ne: me._id, $nin: swiped },
+      age: { $gte: (me.ageRange?.min || 18), $lte: (me.ageRange?.max || 55) },
     };
 
-    if (me.interestedIn === 'women')  filter.gender = 'woman';
-    if (me.interestedIn === 'men')    filter.gender = 'man';
+    if (me.interestedIn === 'women') filter.gender = 'woman';
+    else if (me.interestedIn === 'men') filter.gender = 'man';
 
     const profiles = await User
       .find(filter)
+      .sort({ lastActive: -1 })  // show recently active first
       .select('-password -email')
-      .limit(20)
+      .limit(50)
       .lean();
 
-    res.json({ profiles });
+    console.log(`Found ${profiles.length} profiles for user ${me._id}`);
   } catch (e) {
     console.error('Discover error:', e);
     res.status(500).json({ error: 'Failed to load profiles' });

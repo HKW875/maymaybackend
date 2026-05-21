@@ -240,6 +240,10 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    // Update last active
+    user.lastActive = new Date();
+    await user.save();
+
     // ✅ SUCCESS - Generate token and send user
     const token = makeToken(user._id);
     

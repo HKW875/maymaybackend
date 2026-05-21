@@ -312,7 +312,6 @@ app.get('/api/discover', auth, async (req, res) => {
     console.error('Discover error:', e);
     res.status(500).json({ error: 'Failed to load profiles' });
   }
-  }
 });
 
 /* ─────────────────────────────────────────────────────────────

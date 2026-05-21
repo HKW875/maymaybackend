@@ -221,6 +221,11 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
     const user = await User.findOne({ email });
     
     if (!user) {
@@ -229,13 +234,22 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const isMatch = await user.comparePassword(password);
-    console.log('Password match?', isMatch);   // ← Add this for debugging
+    console.log('Password match for', email, ':', isMatch);
 
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // ... rest of code
+    // ✅ SUCCESS - Generate token and send user
+    const token = makeToken(user._id);
+    
+    res.json({ 
+      token, 
+      user: user.toPublic() 
+    });
+
+    console.log(`✅ User logged in: ${user.email}`);
+
   } catch (e) {
     console.error('Login error:', e);
     res.status(500).json({ error: 'Server error' });

@@ -222,13 +222,22 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
-    if (!user || !(await user.comparePassword(password)))
+    
+    if (!user) {
+      console.log('❌ User not found:', email);
       return res.status(401).json({ error: 'Invalid credentials' });
-    user.lastActive = Date.now();
-    await user.save();
-    const token = makeToken(user._id);
-    res.json({ token, user: user.toPublic() });
+    }
+
+    const isMatch = await user.comparePassword(password);
+    console.log('Password match?', isMatch);   // ← Add this for debugging
+
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // ... rest of code
   } catch (e) {
+    console.error('Login error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -291,10 +291,22 @@ app.put('/api/users/me', auth, async (req, res) => {
 app.post('/api/upload', auth, upload.single('photo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const url = req.file.path;
-    await User.findByIdAndUpdate(req.user.id, { $push: { photos: url } });
-    res.json({ url });
+    
+    const url = req.file.path; // Cloudinary returns the full URL in .path with multer-storage-cloudinary
+    
+    const user = await User.findByIdAndUpdate(
+      req.user.id, 
+      { $push: { photos: url } },
+      { new: true }
+    );
+    
+    res.json({ 
+      success: true,
+      url,
+      photos: user.photos 
+    });
   } catch (e) {
+    console.error(e);
     res.status(500).json({ error: 'Upload failed' });
   }
 });

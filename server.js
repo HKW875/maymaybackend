@@ -199,8 +199,8 @@ app.get('/', (req, res) => res.json({ status: 'Zawadi API running 🌺', version
    ───────────────────────────────────────────────────────────── */
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, age, gender, country } = req.body;
-    if (!name || !email || !password || !age || !gender || !country)
+    const { name, email, password, age, gender, country, interestedIn } = req.body;
+    if (!name || !email || !password || !age || !gender || !country || !interestedIn)
       return res.status(400).json({ error: 'All fields required' });
     if (age < 18)
       return res.status(400).json({ error: 'Must be 18 or older' });
@@ -209,7 +209,7 @@ app.post('/api/auth/register', async (req, res) => {
     if (await User.findOne({ email }))
       return res.status(409).json({ error: 'Email already registered' });
 
-    const user = await User.create({ name, email, password, age, gender, country });
+    const user = await User.create({ name, email, password, age, gender, country, interestedIn });
     const token = makeToken(user._id);
     res.status(201).json({ token, user: user.toPublic() });
   } catch (e) {

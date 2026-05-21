@@ -30,7 +30,7 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
-app.options('*', cors());
+
 
 /* ── MIDDLEWARE ─────────────────────────────────────────────── */
 app.use(cors({
@@ -43,6 +43,8 @@ app.use(cors({
   ],
   credentials: true,
 }));
+
+app.options('*', cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 

@@ -63,13 +63,8 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5 MB
 
 /* ── MONGODB CONNECTION ─────────────────────────────────────── */
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-  // The connection URI should end with /datingapp to target the correct database.
-  // Example URI: mongodb+srv://<user>:<pass>@cluster.mongodb.net/datingapp
-  // All User documents are stored in the "users" collection inside the "datingapp" database.
-}).then(() => console.log('✅ MongoDB connected to datingapp database'))
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('✅ MongoDB connected to datingapp database'))
   .catch(err => console.error('❌ MongoDB error:', err));
 
 /* ════════════════════════════════════════════════════════════
@@ -79,7 +74,7 @@ mongoose.connect(process.env.MONGODB_URI, {
 const UserSchema = new mongoose.Schema({
   name:         { type: String, required: true, trim: true },
   email:        { type: String, required: true, unique: true, lowercase: true, trim: true },
-  password:     { type: String, required: true, minlength: 8 },
+  password:     { type: String, required: true },
   age:          { type: Number, required: true, min: 18 },
   gender:       { type: String, enum: ['woman','man','nonbinary'], required: true },
   country:      { type: String, required: true },
@@ -104,11 +99,10 @@ const UserSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
-UserSchema.pre('save', async function(next) {
+UserSchema.pre('save', async function() {
   if (this.isModified('password')) {
     this.password = await bcrypt.hash(this.password, 12);
   }
-  next();
 });
 
 UserSchema.methods.comparePassword = function(candidate) {
@@ -183,6 +177,8 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'All fields required' });
     if (age < 18)
       return res.status(400).json({ error: 'Must be 18 or older' });
+    if (password.length < 8)
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
     if (await User.findOne({ email }))
       return res.status(409).json({ error: 'Email already registered' });
 

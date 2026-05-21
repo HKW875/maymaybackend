@@ -22,7 +22,7 @@
 require('dotenv').config();
 
 // After require('dotenv')
-const requiredEnv = ['MONGODB_URI', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
+const requiredEnv = ['MONGODB_URI', 'JWT_SECRET', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
 const missing = requiredEnv.filter(key => !process.env[key]);
 if (missing.length > 0) {
   console.error('❌ Missing environment variables:', missing);

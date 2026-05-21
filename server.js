@@ -20,6 +20,14 @@
 */
 
 require('dotenv').config();
+
+// After require('dotenv')
+const requiredEnv = ['MONGODB_URI', 'JWT_SECRET', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
+const missing = requiredEnv.filter(key => !process.env[key]);
+if (missing.length > 0) {
+  console.error('❌ Missing environment variables:', missing);
+  process.exit(1); // Fail fast in dev
+}
 const express    = require('express');
 const mongoose   = require('mongoose');
 const cors       = require('cors');
@@ -63,9 +71,28 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5 MB
 
 /* ── MONGODB CONNECTION ─────────────────────────────────────── */
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB connected to datingapp database'))
-  .catch(err => console.error('❌ MongoDB error:', err));
+
+// Better MongoDB connection
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 10000,
+    });
+    console.log('✅ MongoDB connected successfully');
+  } catch (err) {
+    console.error('❌ MongoDB connection error:', err.message);
+    // Optional: retry logic
+    setTimeout(connectDB, 5000);
+  }
+};
+
+connectDB();
+
+// Handle disconnection
+mongoose.connection.on('disconnected', () => {
+  console.log('MongoDB disconnected. Reconnecting...');
+  connectDB();
+});
 
 /* ════════════════════════════════════════════════════════════
    SCHEMAS
@@ -282,8 +309,9 @@ app.get('/api/discover', auth, async (req, res) => {
 
     res.json({ profiles });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Discover error:', e);
+    res.status(500).json({ error: 'Failed to load profiles' });
+  }
   }
 });
 
@@ -427,4 +455,13 @@ app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
    START
    ───────────────────────────────────────────────────────────── */
 const PORT = process.env.PORT || 5000;
+
+// Global error handler (must be last, before listen)
+app.use((err, req, res, next) => {
+  console.error('🔥 Unhandled Error:', err.stack || err);
+  res.status(500).json({ 
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined 
+  });
+});
 app.listen(PORT, () => console.log(`🌺 Zawadi API running on port ${PORT}`));

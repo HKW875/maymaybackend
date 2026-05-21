@@ -61,7 +61,10 @@ const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5 
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-}).then(() => console.log('✅ MongoDB connected'))
+  // The connection URI should end with /datingapp to target the correct database.
+  // Example URI: mongodb+srv://<user>:<pass>@cluster.mongodb.net/datingapp
+  // All User documents are stored in the "users" collection inside the "datingapp" database.
+}).then(() => console.log('✅ MongoDB connected to datingapp database'))
   .catch(err => console.error('❌ MongoDB error:', err));
 
 /* ════════════════════════════════════════════════════════════
@@ -134,7 +137,7 @@ const MessageSchema = new mongoose.Schema({
   read:         { type: Boolean, default: false },
 }, { timestamps: true });
 
-const User    = mongoose.model('User', UserSchema);
+const User    = mongoose.model('User', UserSchema, 'users'); // stored in datingapp.users
 const Swipe   = mongoose.model('Swipe', SwipeSchema);
 const Match   = mongoose.model('Match', MatchSchema);
 const Message = mongoose.model('Message', MessageSchema);

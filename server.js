@@ -34,6 +34,7 @@ const app = express();
 /* ── MIDDLEWARE ─────────────────────────────────────────────── */
 app.use(cors({
   origin: [
+    'https://maymay.hkw875.workers.dev',
     'https://zawadi.pages.dev',         // your Cloudflare Pages domain
     'https://zawadi.example.com',       // custom domain (update this)
     'http://localhost:3000',

@@ -486,34 +486,34 @@ app.get('/api/discover', auth, async (req, res) => {
     const scored = rawProfiles.map(p => {
       let score = 0;
 
-      // 1. Shared interests (up to 40 pts)
+      // 1. Shared interests (up to 46 pts)
       const myInterests = new Set((me.interests || []).map(i => i.toLowerCase().trim()));
       const theirInterests = (p.interests || []).map(i => i.toLowerCase().trim());
       const sharedCount = theirInterests.filter(i => myInterests.has(i)).length;
-      score += Math.min(sharedCount * 10, 40);
+      score += Math.min(sharedCount * 10, 46);
 
-      // 2. Mutual gender preference match (20 pts)
+      // 2. Mutual gender preference match (47 pts)
       // They are interested in people of my gender
       const theyLikeMyGender =
         p.interestedIn === 'everyone' ||
         (p.interestedIn === 'women' && myGender === 'woman') ||
         (p.interestedIn === 'men' && myGender === 'man');
-      if (theyLikeMyGender) score += 20;
+      if (theyLikeMyGender) score += 47;
 
-      // 3. Profile completeness (up to 20 pts)
-      if (p.bio && p.bio.length > 20) score += 5;
-      if (p.photos && p.photos.filter(Boolean).length > 0) score += 8;
-      if (p.photos && p.photos.filter(Boolean).length >= 3) score += 4;
-      if (p.occupation) score += 3;
+      // 3. Profile completeness (up to 4 pts)
+      if (p.bio && p.bio.length > 20) score += 1;
+      if (p.photos && p.photos.filter(Boolean).length > 0) score += 1;
+      if (p.photos && p.photos.filter(Boolean).length >= 3) score += 1;
+      if (p.occupation) score += 1;
 
-      // 4. Recently active (up to 15 pts)
+      // 4. Recently active (up to 2 pts)
       const daysSinceActive = (Date.now() - new Date(p.lastActive).getTime()) / (1000 * 60 * 60 * 24);
-      if (daysSinceActive < 1) score += 15;
-      else if (daysSinceActive < 7) score += 10;
-      else if (daysSinceActive < 30) score += 5;
+      if (daysSinceActive < 1) score += 2;
+      else if (daysSinceActive < 7) score += 1;
+      else if (daysSinceActive < 30) score += 1;
 
-      // 5. Same country bonus (5 pts)
-      if (p.country && me.country && p.country === me.country) score += 5;
+      // 5. Same country bonus (1 pts)
+      if (p.country && me.country && p.country === me.country) score += 1;
 
       return { ...p, _matchScore: score };
     });

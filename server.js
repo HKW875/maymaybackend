@@ -41,15 +41,28 @@ const app = express();
 
 
 /* ── MIDDLEWARE ─────────────────────────────────────────────── */
+const ALLOWED_ORIGINS = [
+  'https://maymay.hkw875.workers.dev',
+  'https://zawadi.pages.dev',
+  'https://zawadi.example.com',
+  'http://localhost:3000',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500',
+  'http://127.0.0.1:3000',
+  // Add any extra origins via env var (comma-separated)
+  ...(process.env.EXTRA_ORIGINS ? process.env.EXTRA_ORIGINS.split(',').map(o => o.trim()) : []),
+];
+
 app.use(cors({
-  origin: [
-    'https://maymay.hkw875.workers.dev',
-    'https://zawadi.pages.dev',         // your Cloudflare Pages domain
-    'https://zawadi.example.com',       // custom domain (update this)
-    'http://localhost:3000',
-    'http://127.0.0.1:5500',
-  ],
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  origin: (origin, cb) => {
+    // Allow requests with no origin (mobile apps, curl, Postman, same-origin file://)
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin) || process.env.NODE_ENV === 'development') {
+      return cb(null, true);
+    }
+    cb(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
 }));
 
@@ -332,17 +345,25 @@ app.get('/api/discover', auth, async (req, res) => {
     // IDs already swiped
     const swiped = await Swipe.find({ swipedBy: me._id }).distinct('swipedOn');
 
+    // Safe defaults if ageRange is missing (old records created before schema had defaults)
+    const ageMin = me.ageRange?.min ?? 18;
+    const ageMax = me.ageRange?.max ?? 99; // widened from 55 so more profiles are visible
+
     const filter = {
-      _id:    { $ne: me._id, $nin: swiped },
-      age:    { $gte: me.ageRange.min, $lte: me.ageRange.max },
+      _id: { $ne: me._id, $nin: swiped },
+      age: { $gte: ageMin, $lte: ageMax },
     };
 
-    if (me.interestedIn === 'women')  filter.gender = 'woman';
-    if (me.interestedIn === 'men')    filter.gender = 'man';
+    // Gender filter — only restrict when a specific gender is requested
+    const interestedIn = me.interestedIn || 'everyone';
+    if (interestedIn === 'women') filter.gender = 'woman';
+    if (interestedIn === 'men')   filter.gender = 'man';
+    // 'everyone' → no gender filter applied
 
     const profiles = await User
       .find(filter)
       .select('-password -email')
+      .sort({ lastActive: -1 })  // most-recently-active profiles first
       .limit(20)
       .lean();
 

@@ -29,6 +29,8 @@ if (missing.length > 0) {
   process.exit(1); // Fail fast in dev
 }
 const express    = require('express');
+const http       = require('http');
+const { Server } = require('socket.io');
 const mongoose   = require('mongoose');
 const cors       = require('cors');
 const bcrypt     = require('bcryptjs');
@@ -38,6 +40,7 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
+const httpServer = http.createServer(app);
 
 
 /* ── MIDDLEWARE ─────────────────────────────────────────────── */
@@ -53,9 +56,8 @@ const ALLOWED_ORIGINS = [
   ...(process.env.EXTRA_ORIGINS ? process.env.EXTRA_ORIGINS.split(',').map(o => o.trim()) : []),
 ];
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, cb) => {
-    // Allow requests with no origin (mobile apps, curl, Postman, same-origin file://)
     if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin) || process.env.NODE_ENV === 'development') {
       return cb(null, true);
@@ -64,11 +66,108 @@ app.use(cors({
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
-}));
+};
 
-app.options('*', cors());
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+/* ── SOCKET.IO (Real-time chat + WebRTC signaling) ──────────── */
+const io = new Server(httpServer, {
+  cors: {
+    origin: ALLOWED_ORIGINS,
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
+});
+
+// Map userId → socketId for online presence
+const onlineUsers = new Map();
+
+function verifySocketToken(token) {
+  try { return jwt.verify(token, process.env.JWT_SECRET); }
+  catch { return null; }
+}
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+  const decoded = verifySocketToken(token);
+  if (!decoded) return next(new Error('Unauthorized'));
+  socket.userId = decoded.id;
+  next();
+});
+
+io.on('connection', (socket) => {
+  const uid = socket.userId;
+  onlineUsers.set(uid, socket.id);
+  socket.join(`user:${uid}`);
+
+  // Update lastActive in DB
+  User.findByIdAndUpdate(uid, { lastActive: new Date() }).catch(() => {});
+
+  // Notify matches that user is online
+  socket.broadcast.emit('user:online', { userId: uid });
+
+  // ── CHAT ──────────────────────────────────────────────────
+  socket.on('chat:send', async ({ conversationId, text }) => {
+    if (!text?.trim() || !conversationId) return;
+    try {
+      const match = await Match.findOne({ _id: conversationId, users: uid });
+      if (!match) return;
+      const message = await Message.create({ conversation: match._id, sender: uid, text: text.trim() });
+      match.lastMessage = message._id;
+      match.lastActivity = Date.now();
+      await match.save();
+      const payload = {
+        _id: message._id, conversationId, sender: uid,
+        text: message.text, createdAt: message.createdAt,
+      };
+      // Send to all users in the match
+      match.users.forEach(u => {
+        io.to(`user:${u.toString()}`).emit('chat:message', payload);
+      });
+    } catch (e) { console.error('chat:send error', e); }
+  });
+
+  socket.on('chat:typing', ({ conversationId, isTyping }) => {
+    socket.to(`conv:${conversationId}`).emit('chat:typing', { userId: uid, isTyping });
+  });
+
+  socket.on('chat:join', (conversationId) => {
+    socket.join(`conv:${conversationId}`);
+  });
+
+  // ── WEBRTC SIGNALING ──────────────────────────────────────
+  socket.on('call:offer', ({ targetUserId, offer, conversationId }) => {
+    io.to(`user:${targetUserId}`).emit('call:incoming', {
+      fromUserId: uid, offer, conversationId,
+    });
+  });
+
+  socket.on('call:answer', ({ targetUserId, answer }) => {
+    io.to(`user:${targetUserId}`).emit('call:answered', { fromUserId: uid, answer });
+  });
+
+  socket.on('call:ice', ({ targetUserId, candidate }) => {
+    io.to(`user:${targetUserId}`).emit('call:ice', { fromUserId: uid, candidate });
+  });
+
+  socket.on('call:end', ({ targetUserId }) => {
+    io.to(`user:${targetUserId}`).emit('call:ended', { fromUserId: uid });
+  });
+
+  socket.on('call:reject', ({ targetUserId }) => {
+    io.to(`user:${targetUserId}`).emit('call:rejected', { fromUserId: uid });
+  });
+
+  // ── DISCONNECT ────────────────────────────────────────────
+  socket.on('disconnect', () => {
+    onlineUsers.delete(uid);
+    socket.broadcast.emit('user:offline', { userId: uid });
+    User.findByIdAndUpdate(uid, { lastActive: new Date() }).catch(() => {});
+  });
+});
 
 /* ── CLOUDINARY CONFIG ──────────────────────────────────────── */
 cloudinary.config({
@@ -137,6 +236,8 @@ const UserSchema = new mongoose.Schema({
     matches: { type: Number, default: 0 },
     views:   { type: Number, default: 0 },
   },
+  // Compatibility scoring fields
+  matchScore:   { type: Number, default: 0 },
 }, { timestamps: true });
 
 UserSchema.pre('save', async function() {
@@ -338,7 +439,7 @@ app.delete('/api/upload', auth, async (req, res) => {
    DISCOVER
    ───────────────────────────────────────────────────────────── */
 /* ─────────────────────────────────────────────────────────────
-   DISCOVER — Fetch ALL available profiles from MongoDB
+   DISCOVER — Smart matching algorithm, opposite gender by default
    ───────────────────────────────────────────────────────────── */
 app.get('/api/discover', auth, async (req, res) => {
   try {
@@ -356,29 +457,85 @@ app.get('/api/discover', auth, async (req, res) => {
       age: { $gte: ageMin, $lte: ageMax },
     };
 
-    // Very permissive gender filter
-    const interestedIn = (me.interestedIn || 'everyone').toLowerCase();
-    if (interestedIn === 'women') filter.gender = 'woman';
-    else if (interestedIn === 'men') filter.gender = 'man';
-    // 'everyone' or anything else → no gender filter
+    // Gender filter: default to opposite gender
+    // Determine the "opposite" gender for default filtering
+    const myGender = (me.gender || '').toLowerCase();
+    const savedPref = (me.interestedIn || '').toLowerCase();
 
-    const profiles = await User
+    // If user has a saved preference, use it; else default to opposite gender
+    let genderFilter = savedPref;
+    if (!genderFilter || genderFilter === 'everyone') {
+      if (myGender === 'man') genderFilter = 'women';
+      else if (myGender === 'woman') genderFilter = 'men';
+      else genderFilter = 'everyone';
+    }
+
+    if (genderFilter === 'women') filter.gender = 'woman';
+    else if (genderFilter === 'men') filter.gender = 'man';
+    // 'everyone' → no gender filter applied
+
+    const rawProfiles = await User
       .find(filter)
       .select('-password -email')
-      .sort({ lastActive: -1, _id: -1 })   // Most recent first
-      .limit(50)                            // Increased limit
+      .sort({ lastActive: -1, _id: -1 })
+      .limit(100)
       .lean();
 
-    // If still no profiles, return ALL users except current (for very new DBs)
+    // ── MATCHING ALGORITHM ───────────────────────────────────
+    // Score each profile for compatibility with current user
+    const scored = rawProfiles.map(p => {
+      let score = 0;
+
+      // 1. Shared interests (up to 40 pts)
+      const myInterests = new Set((me.interests || []).map(i => i.toLowerCase().trim()));
+      const theirInterests = (p.interests || []).map(i => i.toLowerCase().trim());
+      const sharedCount = theirInterests.filter(i => myInterests.has(i)).length;
+      score += Math.min(sharedCount * 10, 40);
+
+      // 2. Mutual gender preference match (20 pts)
+      // They are interested in people of my gender
+      const theyLikeMyGender =
+        p.interestedIn === 'everyone' ||
+        (p.interestedIn === 'women' && myGender === 'woman') ||
+        (p.interestedIn === 'men' && myGender === 'man');
+      if (theyLikeMyGender) score += 20;
+
+      // 3. Profile completeness (up to 20 pts)
+      if (p.bio && p.bio.length > 20) score += 5;
+      if (p.photos && p.photos.filter(Boolean).length > 0) score += 8;
+      if (p.photos && p.photos.filter(Boolean).length >= 3) score += 4;
+      if (p.occupation) score += 3;
+
+      // 4. Recently active (up to 15 pts)
+      const daysSinceActive = (Date.now() - new Date(p.lastActive).getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSinceActive < 1) score += 15;
+      else if (daysSinceActive < 7) score += 10;
+      else if (daysSinceActive < 30) score += 5;
+
+      // 5. Same country bonus (5 pts)
+      if (p.country && me.country && p.country === me.country) score += 5;
+
+      return { ...p, _matchScore: score };
+    });
+
+    // Sort by score descending, add slight randomness to avoid repetition
+    scored.sort((a, b) => {
+      const diff = b._matchScore - a._matchScore;
+      return diff !== 0 ? diff : Math.random() - 0.5;
+    });
+
+    // Remove internal score field before sending
+    const profiles = scored.slice(0, 50).map(({ _matchScore, ...p }) => p);
+
     if (profiles.length === 0) {
-      const fallbackProfiles = await User
-        .find({ _id: { $ne: me._id } })
+      // Fallback: return opposite-gender users without swipe filter
+      const fallback = await User
+        .find({ _id: { $ne: me._id }, ...(filter.gender ? { gender: filter.gender } : {}) })
         .select('-password -email')
         .sort({ lastActive: -1 })
         .limit(30)
         .lean();
-      
-      return res.json({ profiles: fallbackProfiles });
+      return res.json({ profiles: fallback });
     }
 
     res.json({ profiles });
@@ -429,10 +586,37 @@ app.post('/api/swipe', auth, async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────────────────────
-   MATCHES
+   PROFILE VIEW TRACKING
+   ───────────────────────────────────────────────────────────── */
+app.post('/api/users/:id/view', auth, async (req, res) => {
+  try {
+    const viewedId = req.params.id;
+    // Don't count self-views
+    if (viewedId === req.user.id) return res.json({ ok: true });
+    // Increment view count on the viewed user's profile
+    await User.findByIdAndUpdate(viewedId, { $inc: { 'stats.views': 1 } });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────
+   MATCHES — filtered to opposite gender by default
    ───────────────────────────────────────────────────────────── */
 app.get('/api/matches', auth, async (req, res) => {
   try {
+    const me = await User.findById(req.user.id).select('gender interestedIn').lean();
+    const myGender = (me?.gender || '').toLowerCase();
+    const savedPref = (me?.interestedIn || '').toLowerCase();
+
+    // Determine gender preference (default to opposite gender)
+    let prefGender = savedPref;
+    if (!prefGender || prefGender === 'everyone') {
+      if (myGender === 'man') prefGender = 'women';
+      else if (myGender === 'woman') prefGender = 'men';
+    }
+
     const matches = await Match
       .find({ users: req.user.id })
       .populate('users', '-password -email')
@@ -440,20 +624,29 @@ app.get('/api/matches', auth, async (req, res) => {
       .sort({ lastActivity: -1 })
       .lean();
 
-    const formatted = matches.map(m => {
-      const other = m.users.find(u => u._id.toString() !== req.user.id);
-      return {
-        _id:         m._id,
-        userId:      other?._id,
-        name:        other?.name,
-        age:         other?.age,
-        location:    other?.location,
-        photos:      other?.photos || [],
-        lastMessage: m.lastMessage?.text || '',
-        time:        m.lastActivity,
-        online:      false,
-      };
-    });
+    const formatted = matches
+      .map(m => {
+        const other = m.users.find(u => u._id.toString() !== req.user.id);
+        if (!other) return null;
+        return {
+          _id:         m._id,
+          userId:      other._id,
+          name:        other.name,
+          age:         other.age,
+          gender:      other.gender,
+          location:    other.location,
+          photos:      other.photos || [],
+          lastMessage: m.lastMessage?.text || '',
+          time:        m.lastActivity,
+          online:      onlineUsers.has(other._id.toString()),
+        };
+      })
+      .filter(m => {
+        if (!m) return false;
+        if (prefGender === 'women') return m.gender === 'woman';
+        if (prefGender === 'men') return m.gender === 'man';
+        return true; // everyone
+      });
 
     res.json({ matches: formatted });
   } catch (e) {
@@ -468,7 +661,7 @@ app.get('/api/conversations', auth, async (req, res) => {
   try {
     const convos = await Match
       .find({ users: req.user.id })
-      .populate('users', 'name age photos location')
+      .populate('users', 'name age photos location gender')
       .populate({ path: 'lastMessage', select: 'text createdAt sender' })
       .sort({ lastActivity: -1 })
       .lean();
@@ -480,12 +673,13 @@ app.get('/api/conversations', auth, async (req, res) => {
         userId:      other?._id,
         name:        other?.name || 'Unknown',
         age:         other?.age,
+        gender:      other?.gender,
         location:    other?.location,
         photos:      other?.photos || [],
         photo:       other?.photos?.[0] || null,
         lastMessage: convo.lastMessage?.text || '',
         time:        convo.lastActivity,
-        online:      false,
+        online:      other ? onlineUsers.has(other._id.toString()) : false,
       };
     });
 
@@ -554,4 +748,4 @@ app.use((err, req, res, next) => {
     message: process.env.NODE_ENV === 'development' ? err.message : undefined 
   });
 });
-app.listen(PORT, () => console.log(`🌺 Zawadi API running on port ${PORT}`));
+httpServer.listen(PORT, () => console.log(`🌺 Zawadi API + Socket.IO running on port ${PORT}`));

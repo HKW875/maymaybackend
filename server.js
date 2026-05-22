@@ -333,21 +333,20 @@ app.get('/api/discover', auth, async (req, res) => {
     const swiped = await Swipe.find({ swipedBy: me._id }).distinct('swipedOn');
 
     const filter = {
-      _id: { $ne: me._id, $nin: swiped },
-      age: { $gte: (me.ageRange?.min || 18), $lte: (me.ageRange?.max || 55) },
+      _id:    { $ne: me._id, $nin: swiped },
+      age:    { $gte: me.ageRange.min, $lte: me.ageRange.max },
     };
 
-    if (me.interestedIn === 'women') filter.gender = 'woman';
-    else if (me.interestedIn === 'men') filter.gender = 'man';
+    if (me.interestedIn === 'women')  filter.gender = 'woman';
+    if (me.interestedIn === 'men')    filter.gender = 'man';
 
     const profiles = await User
       .find(filter)
-      .sort({ lastActive: -1 })  // show recently active first
       .select('-password -email')
-      .limit(50)
+      .limit(20)
       .lean();
 
-    console.log(`Found ${profiles.length} profiles for user ${me._id}`);
+    res.json({ profiles });
   } catch (e) {
     console.error('Discover error:', e);
     res.status(500).json({ error: 'Failed to load profiles' });
@@ -434,11 +433,28 @@ app.get('/api/conversations', auth, async (req, res) => {
   try {
     const convos = await Match
       .find({ users: req.user.id })
-      .populate('users', 'name age photos')
+      .populate('users', 'name age photos location')
       .populate({ path: 'lastMessage', select: 'text createdAt sender' })
       .sort({ lastActivity: -1 })
       .lean();
-    res.json({ conversations: convos });
+
+    const formatted = convos.map(convo => {
+      const other = (convo.users || []).find(u => u._id.toString() !== req.user.id);
+      return {
+        _id:         convo._id,
+        userId:      other?._id,
+        name:        other?.name || 'Unknown',
+        age:         other?.age,
+        location:    other?.location,
+        photos:      other?.photos || [],
+        photo:       other?.photos?.[0] || null,
+        lastMessage: convo.lastMessage?.text || '',
+        time:        convo.lastActivity,
+        online:      false,
+      };
+    });
+
+    res.json({ conversations: formatted });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
   }

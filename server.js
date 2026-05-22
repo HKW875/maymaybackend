@@ -337,35 +337,49 @@ app.delete('/api/upload', auth, async (req, res) => {
 /* ─────────────────────────────────────────────────────────────
    DISCOVER
    ───────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   DISCOVER — Fetch ALL available profiles from MongoDB
+   ───────────────────────────────────────────────────────────── */
 app.get('/api/discover', auth, async (req, res) => {
   try {
     const me = await User.findById(req.user.id);
     if (!me) return res.status(404).json({ error: 'User not found' });
 
-    // IDs already swiped
+    // Get already swiped users
     const swiped = await Swipe.find({ swipedBy: me._id }).distinct('swipedOn');
 
-    // Safe defaults if ageRange is missing (old records created before schema had defaults)
     const ageMin = me.ageRange?.min ?? 18;
-    const ageMax = me.ageRange?.max ?? 99; // widened from 55 so more profiles are visible
+    const ageMax = me.ageRange?.max ?? 99;
 
     const filter = {
       _id: { $ne: me._id, $nin: swiped },
       age: { $gte: ageMin, $lte: ageMax },
     };
 
-    // Gender filter — only restrict when a specific gender is requested
-    const interestedIn = me.interestedIn || 'everyone';
+    // Very permissive gender filter
+    const interestedIn = (me.interestedIn || 'everyone').toLowerCase();
     if (interestedIn === 'women') filter.gender = 'woman';
-    if (interestedIn === 'men')   filter.gender = 'man';
-    // 'everyone' → no gender filter applied
+    else if (interestedIn === 'men') filter.gender = 'man';
+    // 'everyone' or anything else → no gender filter
 
     const profiles = await User
       .find(filter)
       .select('-password -email')
-      .sort({ lastActive: -1 })  // most-recently-active profiles first
-      .limit(20)
+      .sort({ lastActive: -1, _id: -1 })   // Most recent first
+      .limit(50)                            // Increased limit
       .lean();
+
+    // If still no profiles, return ALL users except current (for very new DBs)
+    if (profiles.length === 0) {
+      const fallbackProfiles = await User
+        .find({ _id: { $ne: me._id } })
+        .select('-password -email')
+        .sort({ lastActive: -1 })
+        .limit(30)
+        .lean();
+      
+      return res.json({ profiles: fallbackProfiles });
+    }
 
     res.json({ profiles });
   } catch (e) {

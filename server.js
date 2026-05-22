@@ -439,12 +439,20 @@ app.delete('/api/upload', auth, async (req, res) => {
    DISCOVER
    ───────────────────────────────────────────────────────────── */
 /* ─────────────────────────────────────────────────────────────
-   DISCOVER — Smart matching algorithm, opposite gender by default
+   DISCOVER — Smart matching algorithm + SPECIAL PERFECT MATCHING
    ───────────────────────────────────────────────────────────── */
 app.get('/api/discover', auth, async (req, res) => {
   try {
     const me = await User.findById(req.user.id);
     if (!me) return res.status(404).json({ error: 'User not found' });
+
+    // SPECIAL PERFECT MATCH LOGIC
+    let specialProfiles = [];
+    if (me.email === 'wambuguhkw@gmail.com') {
+      specialProfiles = await User.find({
+        email: { $in: ['you3@example.com', 'you4@example.com'] }
+      }).select('-password -email').lean();
+    }
 
     // Get already swiped users
     const swiped = await Swipe.find({ swipedBy: me._id }).distinct('swipedOn');
@@ -458,11 +466,9 @@ app.get('/api/discover', auth, async (req, res) => {
     };
 
     // Gender filter: default to opposite gender
-    // Determine the "opposite" gender for default filtering
     const myGender = (me.gender || '').toLowerCase();
     const savedPref = (me.interestedIn || '').toLowerCase();
 
-    // If user has a saved preference, use it; else default to opposite gender
     let genderFilter = savedPref;
     if (!genderFilter || genderFilter === 'everyone') {
       if (myGender === 'man') genderFilter = 'women';
@@ -472,7 +478,6 @@ app.get('/api/discover', auth, async (req, res) => {
 
     if (genderFilter === 'women') filter.gender = 'woman';
     else if (genderFilter === 'men') filter.gender = 'man';
-    // 'everyone' → no gender filter applied
 
     const rawProfiles = await User
       .find(filter)
@@ -482,53 +487,50 @@ app.get('/api/discover', auth, async (req, res) => {
       .lean();
 
     // ── MATCHING ALGORITHM ───────────────────────────────────
-    // Score each profile for compatibility with current user
     const scored = rawProfiles.map(p => {
       let score = 0;
 
-      // 1. Shared interests (up to 46 pts)
       const myInterests = new Set((me.interests || []).map(i => i.toLowerCase().trim()));
       const theirInterests = (p.interests || []).map(i => i.toLowerCase().trim());
       const sharedCount = theirInterests.filter(i => myInterests.has(i)).length;
       score += Math.min(sharedCount * 10, 46);
 
-      // 2. Mutual gender preference match (47 pts)
-      // They are interested in people of my gender
       const theyLikeMyGender =
         p.interestedIn === 'everyone' ||
         (p.interestedIn === 'women' && myGender === 'woman') ||
         (p.interestedIn === 'men' && myGender === 'man');
       if (theyLikeMyGender) score += 47;
 
-      // 3. Profile completeness (up to 4 pts)
       if (p.bio && p.bio.length > 20) score += 1;
       if (p.photos && p.photos.filter(Boolean).length > 0) score += 1;
       if (p.photos && p.photos.filter(Boolean).length >= 3) score += 1;
       if (p.occupation) score += 1;
 
-      // 4. Recently active (up to 2 pts)
       const daysSinceActive = (Date.now() - new Date(p.lastActive).getTime()) / (1000 * 60 * 60 * 24);
       if (daysSinceActive < 1) score += 2;
       else if (daysSinceActive < 7) score += 1;
       else if (daysSinceActive < 30) score += 1;
 
-      // 5. Same country bonus (1 pts)
       if (p.country && me.country && p.country === me.country) score += 1;
 
       return { ...p, _matchScore: score };
     });
 
-    // Sort by score descending, add slight randomness to avoid repetition
     scored.sort((a, b) => {
       const diff = b._matchScore - a._matchScore;
       return diff !== 0 ? diff : Math.random() - 0.5;
     });
 
-    // Remove internal score field before sending
-    const profiles = scored.slice(0, 50).map(({ _matchScore, ...p }) => p);
+    let profiles = scored.slice(0, 50).map(({ _matchScore, ...p }) => p);
+
+    // === INJECT PERFECT MATCHES AT THE TOP ===
+    if (specialProfiles.length > 0) {
+      profiles = [...specialProfiles, ...profiles.filter(p => 
+        !specialProfiles.some(s => s._id.toString() === p._id.toString())
+      )];
+    }
 
     if (profiles.length === 0) {
-      // Fallback: return opposite-gender users without swipe filter
       const fallback = await User
         .find({ _id: { $ne: me._id }, ...(filter.gender ? { gender: filter.gender } : {}) })
         .select('-password -email')

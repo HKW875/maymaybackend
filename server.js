@@ -446,13 +446,7 @@ app.get('/api/discover', auth, async (req, res) => {
     const me = await User.findById(req.user.id);
     if (!me) return res.status(404).json({ error: 'User not found' });
 
-    // SPECIAL PERFECT MATCH LOGIC
-    let specialProfiles = [];
-    if (me.email === 'wambuguhkw@gmail.com') {
-      specialProfiles = await User.find({
-        email: { $in: ['you3@example.com', 'you4@example.com'] }
-      }).select('-password -email').lean();
-    }
+    
 
     // Get already swiped users
     const swiped = await Swipe.find({ swipedBy: me._id }).distinct('swipedOn');

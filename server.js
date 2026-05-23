@@ -222,6 +222,7 @@ const UserSchema = new mongoose.Schema({
   occupation:   { type: String, default: '' },
   interests:    [String],
   photos:       [String],           // Cloudinary URLs
+  coverPhoto:   { type: String, default: '' }, // Cover image URL
   interestedIn: { type: String, enum: ['women','men','everyone'], default: 'everyone' },
   ageRange:     { min: { type: Number, default: 18 }, max: { type: Number, default: 55 } },
   maxDistance:  { type: Number, default: 100 },
@@ -389,7 +390,7 @@ app.get('/api/users/me', auth, async (req, res) => {
 
 app.put('/api/users/me', auth, async (req, res) => {
   try {
-    const allowed = ['name','age','location','bio','occupation','interests','interestedIn','ageRange','maxDistance'];
+    const allowed = ['name','age','location','bio','occupation','interests','interestedIn','ageRange','maxDistance','coverPhoto'];
     const updates = {};
     allowed.forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
     const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true }).select('-password');
@@ -713,6 +714,24 @@ app.post('/api/messages', auth, async (req, res) => {
     await match.save();
 
     res.status(201).json({ message });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE MESSAGE (sender only)
+   ───────────────────────────────────────────────────────────── */
+app.delete('/api/messages/:messageId', auth, async (req, res) => {
+  try {
+    const message = await Message.findById(req.params.messageId);
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    // Only the sender can delete their own message
+    if (message.sender.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You can only delete your own messages' });
+    }
+    await message.deleteOne();
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
   }

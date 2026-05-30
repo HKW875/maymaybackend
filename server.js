@@ -45,7 +45,8 @@ const httpServer = http.createServer(app);
 
 /* ── MIDDLEWARE ─────────────────────────────────────────────── */
 const ALLOWED_ORIGINS = [
-  'https://realheartz.com',
+  'https://realheartz.com',           // ✅ Production frontend
+  'https://www.realheartz.com',       // ✅ www variant
   'https://maymay.hkw875.workers.dev',
   'https://zawadi.pages.dev',
   'https://zawadi.example.com',

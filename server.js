@@ -224,10 +224,13 @@ const UserSchema = new mongoose.Schema({
   occupation:   { type: String, default: '' },
   interests:    [String],
   photos:       [String],           // Cloudinary URLs
+  educationLevel: { type: String, default: '' },
   interestedIn: { type: String, enum: ['women','men','everyone'], default: 'everyone' },
   ageRange:     { min: { type: Number, default: 18 }, max: { type: Number, default: 55 } },
   maxDistance:  { type: Number, default: 100 },
   isPremium:    { type: Boolean, default: false },
+  coverPhoto:   { type: String, default: '' },     // Cloudinary URL for profile cover image
+  ageVerified:  { type: Boolean, default: false },  // User confirmed 18+ at registration
   premiumUntil: Date,
   boosts:       { type: Number, default: 0 },
   superLikes:   { type: Number, default: 1 },
@@ -315,17 +318,19 @@ app.get('/', (req, res) => res.json({ status: 'Zawadi API running 🌺', version
    ───────────────────────────────────────────────────────────── */
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, age, gender, country, interestedIn } = req.body;
+    const { name, email, password, age, gender, country, interestedIn, educationLevel, ageVerified } = req.body;
     if (!name || !email || !password || !age || !gender || !country || !interestedIn)
       return res.status(400).json({ error: 'All fields required' });
     if (age < 18)
       return res.status(400).json({ error: 'Must be 18 or older' });
+    if (!ageVerified)
+      return res.status(400).json({ error: 'You must confirm you are 18 years of age or older' });
     if (password.length < 8)
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     if (await User.findOne({ email }))
       return res.status(409).json({ error: 'Email already registered' });
 
-    const user = await User.create({ name, email, password, age, gender, country, interestedIn });
+    const user = await User.create({ name, email, password, age, gender, country, interestedIn, educationLevel: educationLevel || '', ageVerified: true });
     const token = makeToken(user._id);
     res.status(201).json({ token, user: user.toPublic() });
   } catch (e) {
@@ -391,7 +396,7 @@ app.get('/api/users/me', auth, async (req, res) => {
 
 app.put('/api/users/me', auth, async (req, res) => {
   try {
-    const allowed = ['name','age','location','bio','occupation','interests','interestedIn','ageRange','maxDistance'];
+    const allowed = ['name','age','location','bio','occupation','interests','interestedIn','ageRange','maxDistance','educationLevel','coverPhoto'];
     const updates = {};
     allowed.forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
     const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true }).select('-password');
@@ -748,3 +753,21 @@ app.use((err, req, res, next) => {
   });
 });
 httpServer.listen(PORT, () => console.log(`🌺 Zawadi API + Socket.IO running on port ${PORT}`));
+/* ─────────────────────────────────────────────────────────────
+   COVER PHOTO UPLOAD (profile banner / cover image)
+   ───────────────────────────────────────────────────────────── */
+app.post('/api/upload/cover', auth, upload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const url = req.file.path;
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { coverPhoto: url },
+      { new: true }
+    );
+    res.json({ success: true, url, coverPhoto: user.coverPhoto });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Cover photo upload failed' });
+  }
+});

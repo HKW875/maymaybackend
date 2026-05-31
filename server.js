@@ -216,6 +216,7 @@ const UserSchema = new mongoose.Schema({
   name:         { type: String, required: true, trim: true },
   email:        { type: String, required: true, unique: true, lowercase: true, trim: true },
   password:     { type: String, required: true },
+  phone:        { type: String, default: '', trim: true },  // Mobile phone with country code
   age:          { type: Number, required: true, min: 18 },
   gender:       { type: String, enum: ['woman','man','nonbinary'], required: true },
   country:      { type: String, required: true },
@@ -243,6 +244,10 @@ const UserSchema = new mongoose.Schema({
   },
   // Compatibility scoring fields
   matchScore:   { type: Number, default: 0 },
+  // Soft-delete fields
+  isDeleted:        { type: Boolean, default: false },
+  deletedAt:        { type: Date,    default: null  },
+  deletionSurvey:   { type: Object,  default: null  },  // stores why user deleted
 }, { timestamps: true });
 
 UserSchema.pre('save', async function() {
@@ -318,9 +323,11 @@ app.get('/', (req, res) => res.json({ status: 'Zawadi API running 🌺', version
    ───────────────────────────────────────────────────────────── */
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, age, gender, country, interestedIn, educationLevel, ageVerified } = req.body;
+    const { name, email, password, age, gender, country, interestedIn, educationLevel, ageVerified, phone } = req.body;
     if (!name || !email || !password || !age || !gender || !country || !interestedIn)
       return res.status(400).json({ error: 'All fields required' });
+    if (!phone || phone.trim().length < 7)
+      return res.status(400).json({ error: 'A valid mobile phone number is required' });
     if (age < 18)
       return res.status(400).json({ error: 'Must be 18 or older' });
     if (!ageVerified)
@@ -330,7 +337,7 @@ app.post('/api/auth/register', async (req, res) => {
     if (await User.findOne({ email }))
       return res.status(409).json({ error: 'Email already registered' });
 
-    const user = await User.create({ name, email, password, age, gender, country, interestedIn, educationLevel: educationLevel || '', ageVerified: true });
+    const user = await User.create({ name, email, password, phone: phone.trim(), age, gender, country, interestedIn, educationLevel: educationLevel || '', ageVerified: true });
     const token = makeToken(user._id);
     res.status(201).json({ token, user: user.toPublic() });
   } catch (e) {
@@ -352,6 +359,11 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user) {
       console.log('❌ User not found:', email);
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Block soft-deleted accounts
+    if (user.isDeleted) {
+      return res.status(401).json({ error: 'This account has been deleted.' });
     }
 
     const isMatch = await user.comparePassword(password);
@@ -459,6 +471,7 @@ app.get('/api/discover', auth, async (req, res) => {
     const filter = {
       _id: { $ne: me._id, $nin: swiped },
       age: { $gte: ageMin, $lte: ageMax },
+      isDeleted: { $ne: true },
     };
 
     // Gender filter: default to opposite gender
@@ -735,6 +748,51 @@ app.post('/api/webhook/stripe', express.raw({ type: 'application/json' }), async
 });
 
 /* ─────────────────────────────────────────────────────────────
+   COVER PHOTO UPLOAD (profile banner / cover image)
+   ───────────────────────────────────────────────────────────── */
+app.post('/api/upload/cover', auth, upload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const url = req.file.path;  // Cloudinary full URL via multer-storage-cloudinary
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { coverPhoto: url },
+      { new: true }
+    );
+    res.json({ success: true, url, coverPhoto: user.coverPhoto });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Cover photo upload failed' });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────
+   ACCOUNT DELETION (soft delete)
+   ───────────────────────────────────────────────────────────── */
+app.delete('/api/users/me', auth, async (req, res) => {
+  try {
+    const { survey } = req.body;  // object with survey answers
+    await User.findByIdAndUpdate(req.user.id, {
+      isDeleted:      true,
+      deletedAt:      new Date(),
+      deletionSurvey: survey || {},
+      // Anonymise PII so the record is effectively inert but stays for audit
+      name:     'Deleted User',
+      bio:      '',
+      photos:   [],
+      coverPhoto: '',
+      location: '',
+      occupation: '',
+      interests:  [],
+    });
+    res.json({ success: true, message: 'Account deleted successfully.' });
+  } catch (e) {
+    console.error('Account deletion error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────
    404
    ───────────────────────────────────────────────────────────── */
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
@@ -753,21 +811,3 @@ app.use((err, req, res, next) => {
   });
 });
 httpServer.listen(PORT, () => console.log(`🌺 Zawadi API + Socket.IO running on port ${PORT}`));
-/* ─────────────────────────────────────────────────────────────
-   COVER PHOTO UPLOAD (profile banner / cover image)
-   ───────────────────────────────────────────────────────────── */
-app.post('/api/upload/cover', auth, upload.single('photo'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const url = req.file.path;
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      { coverPhoto: url },
-      { new: true }
-    );
-    res.json({ success: true, url, coverPhoto: user.coverPhoto });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Cover photo upload failed' });
-  }
-});
